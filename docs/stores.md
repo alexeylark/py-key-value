@@ -30,7 +30,7 @@ long-term storage, prefer stable stores.
 Local stores are stored in memory or on disk, local to the application.
 
 | Store | Stability | Async | Sync | Description |
-|-------|:---------:|:-----:|:----:|:------------|
+| ----- | :-------: | :---: | :--: | ----------- |
 | Memory | N/A | ✅ | ✅ | Fast in-memory storage for development and caching |
 | Disk | Stable | ☑️ | ✅ | Persistent file-based storage in a single file |
 | Disk (Per-Collection) | Stable | ☑️ | ✅ | Persistent storage with separate files per collection |
@@ -315,7 +315,7 @@ Secret stores provide secure storage for sensitive data, typically using
 operating system secret management facilities.
 
 | Store | Stability | Async | Sync | Description |
-|-------|:---------:|:-----:|:----:|:------------|
+| ----- | :-------: | :---: | :--: | ----------- |
 | Keyring | Stable | ✅ | ✅ | OS-level secure storage (Keychain, Credential Manager, etc.) |
 | Vault | Unstable | ✅ | ✅ | HashiCorp Vault integration for enterprise secrets |
 
@@ -395,9 +395,10 @@ pip install py-key-value-aio[vault]
 Distributed stores provide network-based storage for multi-node applications.
 
 | Store | Stability | Async | Sync | Description |
-|-------|:---------:|:-----:|:----:|:------------|
+| ----- | :-------: | :---: | :--: | ----------- |
 | DynamoDB | Unstable | ✅ | ✖️ | AWS DynamoDB key-value storage |
 | Elasticsearch | Unstable | ✅ | ✅ | Full-text search with key-value capabilities |
+| Firestore | Unstable | ✅ | ✅ | Google Cloud Firestore key-value storage |
 | Memcached | Unstable | ✅ | ✖️ | High-performance distributed memory cache |
 | MongoDB | Unstable | ✅ | ✅ | Document database used as key-value store |
 | Redis | Stable | ✅ | ✅ | Popular in-memory data structure store |
@@ -464,6 +465,36 @@ pip install py-key-value-aio[valkey]
 - Open-source governance
 - Production-ready
 - **Stable storage format**
+
+---
+
+### FirestoreStore
+
+Google Cloud Firestore used as a key-value store.
+
+```python
+from key_value.aio.stores.firestore import FirestoreStore
+
+store = FirestoreStore(credentials=google_credentials, database="firestore-db")
+```
+
+**Installation:**
+
+```bash
+pip install py-key-value-aio[firestore]
+```
+
+**Use Cases:**
+
+- Google Cloud-native applications
+- Serverless / managed infrastructure
+- Existing Firestore deployments
+
+**Characteristics:**
+
+- Managed cloud database
+- Document/collection model
+- Stable storage format: **Unstable**
 
 ---
 
