@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from typing import overload
 
 from key_value.shared.utils.managed_entry import ManagedEntry
@@ -10,11 +12,14 @@ from key_value.aio.stores.base import (
 )
 
 try:
-    from google.cloud import firestore
+    from google.cloud import firestore, firestore_admin_v1
+    from google.cloud.firestore_admin_v1.services.firestore_admin.async_client import FirestoreAdminAsyncClient
     from google.oauth2.service_account import Credentials
 except ImportError as e:
     msg = "FirestoreStore requires py-key-value-aio[firestore]"
     raise ImportError(msg) from e
+
+logger = logging.getLogger(__name__)
 
 
 class FirestoreStore(BaseContextManagerStore, BaseStore):
@@ -70,7 +75,7 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
         self._credentials = credentials
         self._project = project
         self._database = database
-        serialization_adapter = BasicSerializationAdapter(value_format="string")
+        serialization_adapter = BasicSerializationAdapter(value_format="string", date_format="datetime")
 
         if client:
             self._client = client
@@ -114,6 +119,57 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
         collection = collection or self.default_collection
         await self._connected_client.collection(collection).document(key).delete()
         return True
+
+    @override
+    async def _setup(self) -> None:
+        # Don't need to create indexes in the test client
+        if type(self._client).__name__== "InMemoryAsyncFirestoreClient":
+            return
+
+        # Enable TTL, disable indexes on every field
+        # This can be done asynchroneously, so that the app starts quickly
+        async def setup_indexes():
+            async with FirestoreAdminAsyncClient(
+                credentials=self._client._credentials,
+                client_info=self._client._client_info,
+                client_options=self._client._client_options,
+            ) as admin_client:
+
+                def update_field_done_callback(name, future: asyncio.Future):
+                    try:
+                        future.result()
+                        logger.debug(f"{name} succeeded!")
+                    except Exception:
+                        logger.error(f"{name} failed", exc_info=True)
+
+                logger.debug("Requesting global index suppression (this affects ALL collections)...")
+                index_op = await admin_client.update_field(
+                    firestore_admin_v1.UpdateFieldRequest(
+                        field=firestore_admin_v1.types.Field(
+                            name=f"projects/{self._client.project}/databases/{self._client._database}/collectionGroups/*/fields/*",
+                            index_config=firestore_admin_v1.types.Field.IndexConfig(
+                                indexes=[],  # Remove all single-field indexes
+                                uses_ancestor_config=False,
+                            ),
+                        ),
+                        update_mask={"paths": ["index_config"]},
+                    )
+                )
+                index_op.add_done_callback(lambda result: update_field_done_callback("Global index suppression", result))
+
+                logger.debug("Enabling TTL on expires_at...")
+                ttl_op = await admin_client.update_field(
+                    firestore_admin_v1.UpdateFieldRequest(
+                        field=firestore_admin_v1.types.Field(
+                            name=f"projects/{self._client.project}/databases/{self._client._database}/collectionGroups/*/fields/expires_at",
+                            ttl_config=firestore_admin_v1.types.Field.TtlConfig(),
+                        ),
+                        update_mask={"paths": ["ttl_config"]},
+                    )
+                )
+                ttl_op.add_done_callback(lambda result: update_field_done_callback("TTL on expire", result))
+
+        asyncio.get_event_loop().create_task(setup_indexes())
 
     async def _close(self) -> None:
         """Close the Firestore client."""
