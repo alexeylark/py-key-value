@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from typing import overload
+from collections.abc import Sequence
+from datetime import datetime
+from typing import cast, overload
 
 from key_value.shared.utils.managed_entry import ManagedEntry
 from typing_extensions import override
@@ -106,6 +108,27 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
             return None
         return self._serialization_adapter.load_dict(data=doc)
 
+    async def _get_managed_entries(self, *, collection: str, keys: Sequence[str]) -> list[ManagedEntry | None]:
+        """Retrieve multiple managed entries from Firestore."""
+        collection = collection or self.default_collection
+
+        # Docs are not ordered, we need to index by key to sort the response
+        docs = {
+            cast("str", doc.id): doc.to_dict()
+            async for doc in self._connected_client.get_all([self._connected_client.collection(collection).document(key) for key in keys])
+            if doc.exists
+        }
+
+        ret: list[ManagedEntry | None] = []
+        for key in keys:
+            doc = docs.get(key)
+            if doc is None:
+                ret.append(None)
+            else:
+                ret.append(self._serialization_adapter.load_dict(data=doc))
+
+        return ret
+
     @override
     async def _put_managed_entry(self, *, key: str, managed_entry: ManagedEntry, collection: str | None = None) -> None:
         """Store a managed entry in Firestore."""
@@ -114,16 +137,43 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
         await self._connected_client.collection(collection).document(key).set(item)  # pyright: ignore[reportUnknownMemberType]
 
     @override
+    async def _put_managed_entries(
+        self,
+        *,
+        collection: str,
+        keys: Sequence[str],
+        managed_entries: Sequence[ManagedEntry],
+        ttl: float | None,
+        created_at: datetime,
+        expires_at: datetime | None,
+    ) -> None:
+        batch = self._connected_client.batch()
+        for key, managed_entry in zip(keys, managed_entries, strict=True):
+            batch.set(
+                self._connected_client.collection(collection).document(key), self._serialization_adapter.dump_dict(entry=managed_entry)
+            )
+        await batch.commit()
+
+    @override
     async def _delete_managed_entry(self, *, key: str, collection: str | None = None) -> bool:
         """Delete a managed entry from Firestore."""
         collection = collection or self.default_collection
         await self._connected_client.collection(collection).document(key).delete()
         return True
 
+    async def _delete_managed_entries(self, *, keys: Sequence[str], collection: str) -> int:
+        """Delete multiple managed entries by key from the specified collection."""
+        batch = self._connected_client.batch()
+        for key in keys:
+            batch.delete(self._connected_client.collection(collection).document(key))
+        await batch.commit()
+
+        return len(keys)
+
     @override
     async def _setup(self) -> None:
         # Don't need to create indexes in the test client
-        if type(self._client).__name__== "InMemoryAsyncFirestoreClient":
+        if type(self._client).__name__ == "InMemoryAsyncFirestoreClient":
             return
 
         # Enable TTL, disable indexes on every field

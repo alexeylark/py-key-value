@@ -1,6 +1,7 @@
 # pyright: reportIncompatibleMethodOverride=false
 
-from typing import Any
+from collections.abc import AsyncGenerator
+from typing import Any, Literal
 
 import pytest
 from typing_extensions import override
@@ -24,7 +25,7 @@ class _InMemoryAsyncFirestoreDocument:
         self._key = key
 
     async def get(self) -> "_InMemoryAsyncFirestoreDocumentSnapshot":
-        return _InMemoryAsyncFirestoreDocumentSnapshot(self._storage.get((self._collection, self._key)))
+        return _InMemoryAsyncFirestoreDocumentSnapshot(self._key, self._storage.get((self._collection, self._key)))
 
     async def set(self, data: dict[str, Any]) -> None:
         self._storage[(self._collection, self._key)] = data
@@ -34,7 +35,8 @@ class _InMemoryAsyncFirestoreDocument:
 
 
 class _InMemoryAsyncFirestoreDocumentSnapshot:
-    def __init__(self, data: dict[str, Any] | None) -> None:
+    def __init__(self, key: str, data: dict[str, Any] | None) -> None:
+        self.id = key
         self._data = data
 
     @property
@@ -56,6 +58,26 @@ class _InMemoryAsyncFirestoreCollection:
         return _InMemoryAsyncFirestoreDocument(storage=self._storage, collection=self._name, key=key)
 
 
+class _InMemoryWriteBatch:
+    def __init__(self, storage: dict[tuple[str, str], dict[str, Any]]) -> None:
+        self._storage = storage
+        self.ops: list[tuple[Literal["put", "delete"], tuple[str, str], dict[str, Any]]] = []  # (op, (collection, key), document)
+
+    def set(self, reference: _InMemoryAsyncFirestoreDocument, data: dict[str, Any]) -> None:
+        self.ops.append(("put", (reference._collection, reference._key), data))
+
+    def delete(self, reference: _InMemoryAsyncFirestoreDocument) -> None:
+        self.ops.append(("delete", (reference._collection, reference._key), {}))
+
+    async def commit(self) -> None:
+        for op, (collection, key), data in self.ops:
+            if op == "put":
+                self._storage[(collection, key)] = data
+            elif op == "delete":
+                self._storage.pop((collection, key), None)
+        self.ops = []
+
+
 class InMemoryAsyncFirestoreClient(firestore.AsyncClient):
     """Minimal in-memory Firestore AsyncClient replacement for tests.
 
@@ -71,6 +93,16 @@ class InMemoryAsyncFirestoreClient(firestore.AsyncClient):
 
     def collection(self, name: str) -> _InMemoryAsyncFirestoreCollection:
         return _InMemoryAsyncFirestoreCollection(storage=self._storage, name=name)
+
+    async def get_all(
+        self,
+        references: list[_InMemoryAsyncFirestoreDocument],
+    ) -> AsyncGenerator[_InMemoryAsyncFirestoreDocumentSnapshot, Any]:
+        for reference in references:
+            yield _InMemoryAsyncFirestoreDocumentSnapshot(reference._key, self._storage.get((reference._collection, reference._key)))
+
+    def batch(self) -> _InMemoryWriteBatch:
+        return _InMemoryWriteBatch(self._storage)
 
     def close(self) -> None:
         self.closed = True
