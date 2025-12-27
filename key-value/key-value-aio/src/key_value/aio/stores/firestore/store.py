@@ -116,11 +116,12 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
     async def _get_managed_entries(self, *, collection: str, keys: Sequence[str]) -> list[ManagedEntry | None]:
         """Retrieve multiple managed entries from Firestore."""
         collection = collection or self.default_collection
+        client = self._connected_client
 
         # Docs are not ordered, we need to index by key to sort the response
         docs = {
             cast("str", doc.id): doc.to_dict()
-            async for doc in self._connected_client.get_all([self._connected_client.collection(collection).document(key) for key in keys])
+            async for doc in client.get_all([client.collection(collection).document(key) for key in keys])
             if doc.exists
         }
 
@@ -152,11 +153,10 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
         created_at: datetime,
         expires_at: datetime | None,
     ) -> None:
-        batch = self._connected_client.batch()
+        client = self._connected_client
+        batch = client.batch()
         for key, managed_entry in zip(keys, managed_entries, strict=True):
-            batch.set(
-                self._connected_client.collection(collection).document(key), self._serialization_adapter.dump_dict(entry=managed_entry)
-            )
+            batch.set(client.collection(collection).document(key), self._serialization_adapter.dump_dict(entry=managed_entry))
         await batch.commit()
 
     @override
@@ -168,26 +168,29 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
 
     async def _delete_managed_entries(self, *, keys: Sequence[str], collection: str) -> int:
         """Delete multiple managed entries by key from the specified collection."""
-        batch = self._connected_client.batch()
+        client = self._connected_client
+        batch = client.batch()
         for key in keys:
-            batch.delete(self._connected_client.collection(collection).document(key))
+            batch.delete(client.collection(collection).document(key))
         await batch.commit()
 
         return len(keys)
 
     @override
     async def _setup(self) -> None:
+        client = self._connected_client
+
         # Don't need to create indexes in the test client
-        if type(self._client).__name__ == "InMemoryAsyncFirestoreClient":
+        if type(client).__name__ == "InMemoryAsyncFirestoreClient":
             return
 
         # Enable TTL, disable indexes on every field
         # This can be done asynchroneously, so that the app starts quickly
         async def setup_indexes():
             async with FirestoreAdminAsyncClient(
-                credentials=self._client._credentials,
-                client_info=self._client._client_info,
-                client_options=self._client._client_options,
+                credentials=client._credentials,
+                client_info=client._client_info,
+                client_options=client._client_options,
             ) as admin_client:
 
                 def update_field_done_callback(name, future: asyncio.Future):
@@ -201,7 +204,7 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
                 index_op = await admin_client.update_field(
                     firestore_admin_v1.UpdateFieldRequest(
                         field=firestore_admin_v1.types.Field(
-                            name=f"projects/{self._client.project}/databases/{self._client._database}/collectionGroups/*/fields/*",
+                            name=f"projects/{client.project}/databases/{client._database}/collectionGroups/*/fields/*",
                             index_config=firestore_admin_v1.types.Field.IndexConfig(
                                 indexes=[],  # Remove all single-field indexes
                                 uses_ancestor_config=False,
@@ -216,7 +219,7 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
                 ttl_op = await admin_client.update_field(
                     firestore_admin_v1.UpdateFieldRequest(
                         field=firestore_admin_v1.types.Field(
-                            name=f"projects/{self._client.project}/databases/{self._client._database}/collectionGroups/*/fields/expires_at",
+                            name=f"projects/{client.project}/databases/{client._database}/collectionGroups/*/fields/expires_at",
                             ttl_config=firestore_admin_v1.types.Field.TtlConfig(),
                         ),
                         update_mask={"paths": ["ttl_config"]},
