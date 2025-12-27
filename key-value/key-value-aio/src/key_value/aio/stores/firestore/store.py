@@ -44,7 +44,12 @@ class FirestoreStore(BaseContextManagerStore, BaseStore):
 
     @overload
     def __init__(
-        self, *, credentials: Credentials, project: str | None = None, database: str | None = None, default_collection: str | None = None
+        self,
+        *,
+        credentials: Credentials | None = None,
+        project: str | None = None,
+        database: str | None = None,
+        default_collection: str | None = None,
     ) -> None:
         """Initialize the Firestore store with Google service account credentials.
 
